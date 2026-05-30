@@ -115,10 +115,23 @@ This web site is using ${"`"}markedjs/marked${"`"}.
     let activeDocId = null;
 
     const persistDocs = () => {
-        const expiredAt = new Date(2099, 1, 1);
-        const toSave = docs.map(({ id, name, content }) => ({ id, name, content }));
-        Storehouse.setItem(localStorageNamespace, DOCS_KEY, toSave, expiredAt);
-        Storehouse.setItem(localStorageNamespace, ACTIVE_DOC_KEY, activeDocId, expiredAt);
+        try {
+            const expiredAt = new Date(2099, 1, 1);
+            const toSave = docs.map(({ id, name, content }) => ({ id, name, content }));
+            Storehouse.setItem(localStorageNamespace, DOCS_KEY, toSave, expiredAt);
+            Storehouse.setItem(localStorageNamespace, ACTIVE_DOC_KEY, activeDocId, expiredAt);
+        } catch (e) {
+            // ignore storage errors (e.g. quota exceeded)
+        }
+    };
+
+    let persistDocsTimer = null;
+    const schedulePersistDocs = () => {
+        if (persistDocsTimer) clearTimeout(persistDocsTimer);
+        persistDocsTimer = setTimeout(() => {
+            persistDocsTimer = null;
+            persistDocs();
+        }, 300);
     };
 
     const initDocs = () => {
@@ -216,8 +229,15 @@ This web site is using ${"`"}markedjs/marked${"`"}.
 
     const undoClose = () => {
         if (!undoState) return;
-        const { doc, index } = undoState;
+        const { doc, index, autoCreatedId } = undoState;
         undoState = null;
+        if (autoCreatedId) {
+            const autoIdx = docs.findIndex(d => d.id === autoCreatedId);
+            if (autoIdx >= 0) {
+                const [auto] = docs.splice(autoIdx, 1);
+                auto.model.dispose();
+            }
+        }
         docs.splice(index, 0, doc);
         if (undoTimer) { clearTimeout(undoTimer); undoTimer = null; }
         document.getElementById('undo-toast').classList.add('hidden');
@@ -231,13 +251,14 @@ This web site is using ${"`"}markedjs/marked${"`"}.
         if (undoState) disposeUndo();
 
         const [removed] = docs.splice(index, 1);
-        undoState = { doc: removed, index };
+        undoState = { doc: removed, index, autoCreatedId: null };
 
         if (docs.length === 0) {
             const fresh = createDoc('');
             fresh.model = monaco.editor.createModel('', 'markdown');
             docs.push(fresh);
             activeDocId = fresh.id;
+            undoState.autoCreatedId = fresh.id;
         } else if (activeDocId === id) {
             const newIndex = Math.min(index, docs.length - 1);
             activeDocId = docs[newIndex].id;
@@ -325,7 +346,7 @@ This web site is using ${"`"}markedjs/marked${"`"}.
                 }
             }
             convert(value);
-            persistDocs();
+            schedulePersistDocs();
         });
 
         editor.onDidScrollChange((e) => {
