@@ -10,6 +10,9 @@ const init = () => {
 
     const localStorageNamespace = 'com.markdownlivepreview';
     const localStorageKey = 'last_state';
+    const DOCS_KEY = 'documents';
+    const ACTIVE_DOC_KEY = 'active_document_id';
+    const MAX_TABS = 15;
     const localStorageScrollBarKey = 'scroll_bar_settings';
     const localStorageThemeKey = 'theme_settings';
     const confirmationMessage = 'Are you sure you want to reset? Your changes will be lost.';
@@ -94,6 +97,42 @@ ${"`"}${"`"}${"`"}
 
 This web site is using ${"`"}markedjs/marked${"`"}.
 `;
+
+    const generateId = () => `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+
+    const createDoc = (content = '', name = null) => ({ id: generateId(), name, content });
+
+    const getAutoName = (content) => {
+        const match = content.match(/^#{1,6}\s+(.+)/m);
+        return match ? match[1].trim() : 'Untitled';
+    };
+
+    const getTabLabel = (doc) => doc.name !== null ? doc.name : getAutoName(doc.content);
+
+    let docs = [];
+    let activeDocId = null;
+
+    const persistDocs = () => {
+        const expiredAt = new Date(2099, 1, 1);
+        const toSave = docs.map(({ id, name, content }) => ({ id, name, content }));
+        Storehouse.setItem(localStorageNamespace, DOCS_KEY, toSave, expiredAt);
+        Storehouse.setItem(localStorageNamespace, ACTIVE_DOC_KEY, activeDocId, expiredAt);
+    };
+
+    const initDocs = () => {
+        const saved = Storehouse.getItem(localStorageNamespace, DOCS_KEY);
+        if (Array.isArray(saved) && saved.length > 0) {
+            docs = saved;
+            const savedActiveId = Storehouse.getItem(localStorageNamespace, ACTIVE_DOC_KEY);
+            activeDocId = docs.find(d => d.id === savedActiveId) ? savedActiveId : docs[0].id;
+            return;
+        }
+        // migrate from legacy key, or seed with default template
+        const legacy = Storehouse.getItem(localStorageNamespace, localStorageKey);
+        const firstDoc = createDoc(legacy || defaultInput);
+        docs = [firstDoc];
+        activeDocId = firstDoc.id;
+    };
 
     self.MonacoEnvironment = {
         getWorker(_, label) {
