@@ -463,14 +463,15 @@ This web site is using ${"`"}markedjs/marked${"`"}.
 
     // Reset input text
     let reset = () => {
-        let changed = editor.getValue() != defaultInput;
+        let changed = editor.getValue() !== defaultInput;
         if (hasEdited || changed) {
-            var confirmed = window.confirm(confirmationMessage);
-            if (!confirmed) {
-                return;
-            }
+            const confirmed = window.confirm(confirmationMessage);
+            if (!confirmed) return;
         }
+        const activeDoc = docs.find(d => d.id === activeDocId);
+        if (activeDoc) activeDoc.name = null;
         presetValue(defaultInput);
+        renderTabs();
         document.querySelectorAll('.column').forEach((element) => {
             element.scrollTo({ top: 0 });
         });
