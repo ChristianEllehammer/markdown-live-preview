@@ -7,6 +7,8 @@ import mermaid from 'mermaid';
 const init = () => {
     let hasEdited = false;
     let scrollBarSync = false;
+    let undoState = null;
+    let undoTimer = null;
 
     const localStorageNamespace = 'com.markdownlivepreview';
     const localStorageKey = 'last_state';
@@ -198,6 +200,55 @@ This web site is using ${"`"}markedjs/marked${"`"}.
         doc.model = monaco.editor.createModel('', 'markdown');
         docs.push(doc);
         switchToDoc(doc.id);
+    };
+
+    const showUndoToast = () => {
+        if (undoTimer) clearTimeout(undoTimer);
+        document.getElementById('undo-toast').classList.remove('hidden');
+        undoTimer = setTimeout(() => disposeUndo(), 5000);
+    };
+
+    const disposeUndo = () => {
+        document.getElementById('undo-toast').classList.add('hidden');
+        if (undoTimer) { clearTimeout(undoTimer); undoTimer = null; }
+        if (undoState) { undoState.doc.model.dispose(); undoState = null; }
+    };
+
+    const undoClose = () => {
+        if (!undoState) return;
+        const { doc, index } = undoState;
+        undoState = null;
+        docs.splice(index, 0, doc);
+        if (undoTimer) { clearTimeout(undoTimer); undoTimer = null; }
+        document.getElementById('undo-toast').classList.add('hidden');
+        switchToDoc(doc.id);
+    };
+
+    const closeDoc = (id) => {
+        const index = docs.findIndex(d => d.id === id);
+        if (index < 0) return;
+
+        if (undoState) disposeUndo();
+
+        const [removed] = docs.splice(index, 1);
+        undoState = { doc: removed, index };
+
+        if (docs.length === 0) {
+            const fresh = createDoc('');
+            fresh.model = monaco.editor.createModel('', 'markdown');
+            docs.push(fresh);
+            activeDocId = fresh.id;
+        } else if (activeDocId === id) {
+            const newIndex = Math.min(index, docs.length - 1);
+            activeDocId = docs[newIndex].id;
+        }
+
+        const nowActive = docs.find(d => d.id === activeDocId);
+        editor.setModel(nowActive.model);
+        convert(nowActive.model.getValue());
+        renderTabs();
+        persistDocs();
+        showUndoToast();
     };
 
     self.MonacoEnvironment = {
@@ -763,6 +814,7 @@ This web site is using ${"`"}markedjs/marked${"`"}.
     convert(activeDoc.model.getValue());
     renderTabs();
     document.getElementById('add-tab-btn').addEventListener('click', addNewDoc);
+    document.getElementById('undo-btn').addEventListener('click', undoClose);
     setupResetButton();
     setupCopyButton(editor);
     setupExportButton();
