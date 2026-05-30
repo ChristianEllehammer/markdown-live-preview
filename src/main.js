@@ -150,6 +150,56 @@ This web site is using ${"`"}markedjs/marked${"`"}.
         persistDocs();
     };
 
+    const renderTabs = () => {
+        const tabsEl = document.getElementById('tabs');
+        const addBtn = document.getElementById('add-tab-btn');
+        tabsEl.innerHTML = '';
+
+        docs.forEach(doc => {
+            const tab = document.createElement('div');
+            tab.className = 'tab' + (doc.id === activeDocId ? ' active' : '');
+            tab.dataset.id = doc.id;
+
+            const label = document.createElement('span');
+            label.className = 'tab-label';
+            label.textContent = getTabLabel(doc);
+
+            const closeBtn = document.createElement('span');
+            closeBtn.className = 'tab-close';
+            closeBtn.textContent = '×';
+            closeBtn.title = 'Close';
+
+            tab.appendChild(label);
+            tab.appendChild(closeBtn);
+            tabsEl.appendChild(tab);
+
+            tab.addEventListener('click', (e) => {
+                if (e.target === closeBtn) return;
+                switchToDoc(doc.id);
+            });
+
+            closeBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                closeDoc(doc.id); // defined in Task 5 — forward reference
+            });
+
+            label.addEventListener('dblclick', (e) => {
+                e.stopPropagation();
+                startRename(tab, doc); // defined in Task 6 — forward reference
+            });
+        });
+
+        addBtn.disabled = docs.length >= MAX_TABS;
+    };
+
+    const addNewDoc = () => {
+        if (docs.length >= MAX_TABS) return;
+        const doc = createDoc('');
+        doc.model = monaco.editor.createModel('', 'markdown');
+        docs.push(doc);
+        switchToDoc(doc.id);
+    };
+
     self.MonacoEnvironment = {
         getWorker(_, label) {
             return new Proxy({}, { get: () => () => { } });
@@ -711,6 +761,8 @@ This web site is using ${"`"}markedjs/marked${"`"}.
     const activeDoc = docs.find(d => d.id === activeDocId);
     editor.setModel(activeDoc.model);
     convert(activeDoc.model.getValue());
+    renderTabs();
+    document.getElementById('add-tab-btn').addEventListener('click', addNewDoc);
     setupResetButton();
     setupCopyButton(editor);
     setupExportButton();
