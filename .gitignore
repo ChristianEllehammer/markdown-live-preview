@@ -67,3 +67,9 @@ node_modules/
 # dotenv environment variables file
 .env
 
+
+# brainstorming visual companion
+.superpowers/
+
+# git worktrees
+.worktrees/

@@ -7,9 +7,14 @@ import mermaid from 'mermaid';
 const init = () => {
     let hasEdited = false;
     let scrollBarSync = false;
+    let undoState = null;
+    let undoTimer = null;
 
     const localStorageNamespace = 'com.markdownlivepreview';
     const localStorageKey = 'last_state';
+    const DOCS_KEY = 'documents';
+    const ACTIVE_DOC_KEY = 'active_document_id';
+    const MAX_TABS = 15;
     const localStorageScrollBarKey = 'scroll_bar_settings';
     const localStorageThemeKey = 'theme_settings';
     const confirmationMessage = 'Are you sure you want to reset? Your changes will be lost.';
@@ -95,6 +100,211 @@ ${"`"}${"`"}${"`"}
 This web site is using ${"`"}markedjs/marked${"`"}.
 `;
 
+    const generateId = () => `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+
+    const createDoc = (content = '', name = null) => ({ id: generateId(), name, content });
+
+    const getAutoName = (content) => {
+        const match = content.match(/^#{1,6}\s+(.+)/m);
+        return match ? match[1].trim() : 'Untitled';
+    };
+
+    const getTabLabel = (doc) => doc.name !== null ? doc.name : getAutoName(doc.content);
+
+    let docs = [];
+    let activeDocId = null;
+
+    const persistDocs = () => {
+        try {
+            const expiredAt = new Date(2099, 1, 1);
+            const toSave = docs.map(({ id, name, content }) => ({ id, name, content }));
+            Storehouse.setItem(localStorageNamespace, DOCS_KEY, toSave, expiredAt);
+            Storehouse.setItem(localStorageNamespace, ACTIVE_DOC_KEY, activeDocId, expiredAt);
+        } catch (e) {
+            // ignore storage errors (e.g. quota exceeded)
+        }
+    };
+
+    let persistDocsTimer = null;
+    const schedulePersistDocs = () => {
+        if (persistDocsTimer) clearTimeout(persistDocsTimer);
+        persistDocsTimer = setTimeout(() => {
+            persistDocsTimer = null;
+            persistDocs();
+        }, 300);
+    };
+
+    const initDocs = () => {
+        const saved = Storehouse.getItem(localStorageNamespace, DOCS_KEY);
+        if (Array.isArray(saved) && saved.length > 0) {
+            docs = saved;
+            const savedActiveId = Storehouse.getItem(localStorageNamespace, ACTIVE_DOC_KEY);
+            activeDocId = docs.find(d => d.id === savedActiveId) ? savedActiveId : docs[0].id;
+            return;
+        }
+        // migrate from legacy key, or seed with default template
+        const legacy = Storehouse.getItem(localStorageNamespace, localStorageKey);
+        const firstDoc = createDoc(legacy || defaultInput);
+        docs = [firstDoc];
+        activeDocId = firstDoc.id;
+    };
+
+    const initDocModels = () => {
+        docs.forEach(doc => {
+            doc.model = monaco.editor.createModel(doc.content, 'markdown');
+        });
+    };
+
+    const switchToDoc = (id) => {
+        const doc = docs.find(d => d.id === id);
+        if (!doc) return;
+        activeDocId = id;
+        editor.setModel(doc.model);
+        convert(doc.model.getValue());
+        renderTabs(); // defined in Task 4 — forward reference is fine
+        persistDocs();
+    };
+
+    const renderTabs = () => {
+        const tabsEl = document.getElementById('tabs');
+        const addBtn = document.getElementById('add-tab-btn');
+        tabsEl.innerHTML = '';
+
+        docs.forEach(doc => {
+            const tab = document.createElement('div');
+            tab.className = 'tab' + (doc.id === activeDocId ? ' active' : '');
+            tab.dataset.id = doc.id;
+
+            const label = document.createElement('span');
+            label.className = 'tab-label';
+            label.textContent = getTabLabel(doc);
+
+            const closeBtn = document.createElement('span');
+            closeBtn.className = 'tab-close';
+            closeBtn.textContent = '×';
+            closeBtn.title = 'Close';
+
+            tab.appendChild(label);
+            tab.appendChild(closeBtn);
+            tabsEl.appendChild(tab);
+
+            tab.addEventListener('click', (e) => {
+                if (e.target === closeBtn) return;
+                switchToDoc(doc.id);
+            });
+
+            closeBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                closeDoc(doc.id); // defined in Task 5 — forward reference
+            });
+
+            label.addEventListener('dblclick', (e) => {
+                e.stopPropagation();
+                startRename(tab, doc); // defined in Task 6 — forward reference
+            });
+        });
+
+        addBtn.disabled = docs.length >= MAX_TABS;
+    };
+
+    const addNewDoc = () => {
+        if (docs.length >= MAX_TABS) return;
+        const doc = createDoc('');
+        doc.model = monaco.editor.createModel('', 'markdown');
+        docs.push(doc);
+        switchToDoc(doc.id);
+    };
+
+    const showUndoToast = () => {
+        if (undoTimer) clearTimeout(undoTimer);
+        document.getElementById('undo-toast').classList.remove('hidden');
+        undoTimer = setTimeout(() => disposeUndo(), 5000);
+    };
+
+    const disposeUndo = () => {
+        document.getElementById('undo-toast').classList.add('hidden');
+        if (undoTimer) { clearTimeout(undoTimer); undoTimer = null; }
+        if (undoState) { undoState.doc.model.dispose(); undoState = null; }
+    };
+
+    const undoClose = () => {
+        if (!undoState) return;
+        const { doc, index, autoCreatedId } = undoState;
+        undoState = null;
+        if (autoCreatedId) {
+            const autoIdx = docs.findIndex(d => d.id === autoCreatedId);
+            if (autoIdx >= 0) {
+                const [auto] = docs.splice(autoIdx, 1);
+                auto.model.dispose();
+            }
+        }
+        docs.splice(index, 0, doc);
+        if (undoTimer) { clearTimeout(undoTimer); undoTimer = null; }
+        document.getElementById('undo-toast').classList.add('hidden');
+        switchToDoc(doc.id);
+    };
+
+    const closeDoc = (id) => {
+        const index = docs.findIndex(d => d.id === id);
+        if (index < 0) return;
+
+        if (undoState) disposeUndo();
+
+        const [removed] = docs.splice(index, 1);
+        undoState = { doc: removed, index, autoCreatedId: null };
+
+        if (docs.length === 0) {
+            const fresh = createDoc('');
+            fresh.model = monaco.editor.createModel('', 'markdown');
+            docs.push(fresh);
+            activeDocId = fresh.id;
+            undoState.autoCreatedId = fresh.id;
+        } else if (activeDocId === id) {
+            const newIndex = Math.min(index, docs.length - 1);
+            activeDocId = docs[newIndex].id;
+        }
+
+        const nowActive = docs.find(d => d.id === activeDocId);
+        editor.setModel(nowActive.model);
+        convert(nowActive.model.getValue());
+        renderTabs();
+        persistDocs();
+        showUndoToast();
+    };
+
+    const startRename = (tabEl, doc) => {
+        const label = tabEl.querySelector('.tab-label');
+        if (!label) return;
+
+        const input = document.createElement('input');
+        input.className = 'tab-rename-input';
+        input.type = 'text';
+        input.value = doc.name !== null ? doc.name : getAutoName(doc.content);
+
+        let committed = false;
+
+        const commit = (save) => {
+            if (committed) return;
+            committed = true;
+            if (save) {
+                const val = input.value.trim();
+                doc.name = val || null;
+                persistDocs();
+            }
+            renderTabs();
+        };
+
+        label.replaceWith(input);
+        input.focus();
+        input.select();
+
+        input.addEventListener('blur', () => commit(true));
+        input.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') { e.preventDefault(); commit(true); }
+            if (e.key === 'Escape') { e.preventDefault(); commit(false); }
+        });
+    };
+
     self.MonacoEnvironment = {
         getWorker(_, label) {
             return new Proxy({}, { get: () => () => { } });
@@ -120,13 +330,23 @@ This web site is using ${"`"}markedjs/marked${"`"}.
         });
 
         editor.onDidChangeModelContent(() => {
-            let changed = editor.getValue() != defaultInput;
-            if (changed) {
-                hasEdited = true;
+            const value = editor.getValue();
+            const activeDoc = docs.find(d => d.id === activeDocId);
+            if (activeDoc) {
+                activeDoc.content = value;
+                if (value !== defaultInput) hasEdited = true;
+                if (activeDoc.name === null) {
+                    const tabEl = document.querySelector(`.tab[data-id="${activeDocId}"]`);
+                    if (tabEl) {
+                        const label = tabEl.querySelector('.tab-label');
+                        if (label && label.tagName !== 'INPUT') {
+                            label.textContent = getAutoName(value);
+                        }
+                    }
+                }
             }
-            let value = editor.getValue();
             convert(value);
-            saveLastContent(value);
+            schedulePersistDocs();
         });
 
         editor.onDidScrollChange((e) => {
@@ -264,14 +484,15 @@ This web site is using ${"`"}markedjs/marked${"`"}.
 
     // Reset input text
     let reset = () => {
-        let changed = editor.getValue() != defaultInput;
+        let changed = editor.getValue() !== defaultInput;
         if (hasEdited || changed) {
-            var confirmed = window.confirm(confirmationMessage);
-            if (!confirmed) {
-                return;
-            }
+            const confirmed = window.confirm(confirmationMessage);
+            if (!confirmed) return;
         }
+        const activeDoc = docs.find(d => d.id === activeDocId);
+        if (activeDoc) activeDoc.name = null;
         presetValue(defaultInput);
+        renderTabs();
         document.querySelectorAll('.column').forEach((element) => {
             element.scrollTo({ top: 0 });
         });
@@ -640,13 +861,15 @@ This web site is using ${"`"}markedjs/marked${"`"}.
     };
 
     // ----- entry point -----
-    let lastContent = loadLastContent();
+    initDocs();
     let editor = setupEditor();
-    if (lastContent) {
-        presetValue(lastContent);
-    } else {
-        presetValue(defaultInput);
-    }
+    initDocModels();
+    const activeDoc = docs.find(d => d.id === activeDocId);
+    editor.setModel(activeDoc.model);
+    convert(activeDoc.model.getValue());
+    renderTabs();
+    document.getElementById('add-tab-btn').addEventListener('click', addNewDoc);
+    document.getElementById('undo-btn').addEventListener('click', undoClose);
     setupResetButton();
     setupCopyButton(editor);
     setupExportButton();
