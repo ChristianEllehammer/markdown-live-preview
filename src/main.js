@@ -134,6 +134,22 @@ This web site is using ${"`"}markedjs/marked${"`"}.
         activeDocId = firstDoc.id;
     };
 
+    const initDocModels = () => {
+        docs.forEach(doc => {
+            doc.model = monaco.editor.createModel(doc.content, 'markdown');
+        });
+    };
+
+    const switchToDoc = (id) => {
+        const doc = docs.find(d => d.id === id);
+        if (!doc) return;
+        activeDocId = id;
+        editor.setModel(doc.model);
+        convert(doc.model.getValue());
+        renderTabs(); // defined in Task 4 — forward reference is fine
+        persistDocs();
+    };
+
     self.MonacoEnvironment = {
         getWorker(_, label) {
             return new Proxy({}, { get: () => () => { } });
@@ -159,13 +175,23 @@ This web site is using ${"`"}markedjs/marked${"`"}.
         });
 
         editor.onDidChangeModelContent(() => {
-            let changed = editor.getValue() != defaultInput;
-            if (changed) {
-                hasEdited = true;
+            const value = editor.getValue();
+            const activeDoc = docs.find(d => d.id === activeDocId);
+            if (activeDoc) {
+                activeDoc.content = value;
+                if (value !== defaultInput) hasEdited = true;
+                if (activeDoc.name === null) {
+                    const tabEl = document.querySelector(`.tab[data-id="${activeDocId}"]`);
+                    if (tabEl) {
+                        const label = tabEl.querySelector('.tab-label');
+                        if (label && label.tagName !== 'INPUT') {
+                            label.textContent = getAutoName(value);
+                        }
+                    }
+                }
             }
-            let value = editor.getValue();
             convert(value);
-            saveLastContent(value);
+            persistDocs();
         });
 
         editor.onDidScrollChange((e) => {
@@ -679,13 +705,12 @@ This web site is using ${"`"}markedjs/marked${"`"}.
     };
 
     // ----- entry point -----
-    let lastContent = loadLastContent();
+    initDocs();
     let editor = setupEditor();
-    if (lastContent) {
-        presetValue(lastContent);
-    } else {
-        presetValue(defaultInput);
-    }
+    initDocModels();
+    const activeDoc = docs.find(d => d.id === activeDocId);
+    editor.setModel(activeDoc.model);
+    convert(activeDoc.model.getValue());
     setupResetButton();
     setupCopyButton(editor);
     setupExportButton();
