@@ -251,6 +251,39 @@ This web site is using ${"`"}markedjs/marked${"`"}.
         showUndoToast();
     };
 
+    const startRename = (tabEl, doc) => {
+        const label = tabEl.querySelector('.tab-label');
+        if (!label) return;
+
+        const input = document.createElement('input');
+        input.className = 'tab-rename-input';
+        input.type = 'text';
+        input.value = doc.name !== null ? doc.name : getAutoName(doc.content);
+
+        let committed = false;
+
+        const commit = (save) => {
+            if (committed) return;
+            committed = true;
+            if (save) {
+                const val = input.value.trim();
+                doc.name = val || null;
+                persistDocs();
+            }
+            renderTabs();
+        };
+
+        label.replaceWith(input);
+        input.focus();
+        input.select();
+
+        input.addEventListener('blur', () => commit(true));
+        input.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') { e.preventDefault(); commit(true); }
+            if (e.key === 'Escape') { e.preventDefault(); commit(false); }
+        });
+    };
+
     self.MonacoEnvironment = {
         getWorker(_, label) {
             return new Proxy({}, { get: () => () => { } });
